@@ -11,6 +11,7 @@
   <Description DefaultValue="Vytvořte nový úkol v Task Manageru přímo z Outlooku."/>
   <IconUrl DefaultValue="https://shatexx.github.io/vpmgprweemm/assets/icon-32.png"/>
   <HighResolutionIconUrl DefaultValue="https://shatexx.github.io/vpmgprweemm/assets/icon-80.png"/>
+  <SupportUrl DefaultValue="https://shatexx.github.io/vpmgprweemm/taskpane.html"/>
   <AppDomains>
     <AppDomain>https://tm-bms.duckdns.org</AppDomain>
   </AppDomains>
@@ -63,10 +64,6 @@
                   <Action xsi:type="ShowTaskpane">
                     <SourceLocation resid="Taskpane.Url" />
                   </Action>
-                  <!-- Also shows with no email open/selected, so this one
-                       button covers both "turn this email into a task" and
-                       a plain "new task" shortcut. -->
-                  <SupportsNoItemContext>true</SupportsNoItemContext>
                 </Control>
               </Group>
             </OfficeTab>
