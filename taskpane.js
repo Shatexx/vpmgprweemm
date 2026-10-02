@@ -256,6 +256,25 @@
         return (hour && minute) ? (hour + ':' + minute) : '';
     }
 
+    // Resolves to true/false, same convention as uploadOneAttachment -
+    // never rejects, so the caller doesn't need its own catch.
+    function setTaskDescription(taskId, description) {
+        return fetch(API_BASE + '/api/outlook-addin/tasks/' + taskId + '/field', {
+            method: 'PATCH',
+            headers: {
+                'Content-Type': 'application/json',
+                Accept: 'application/json',
+                Authorization: 'Bearer ' + getToken(),
+            },
+            body: JSON.stringify({ field: 'description', value: description }),
+        })
+            .then(function (response) { return response.ok; })
+            .catch(function (err) {
+                console.warn('Outlook add-in: setting description failed', err);
+                return false;
+            });
+    }
+
     function loadAssignableUsers(selectEl) {
         fetch(API_BASE + '/api/outlook-addin/users', {
             headers: {
@@ -401,9 +420,13 @@
         var selectedAttachments = getSelectedAttachments();
 
         withDescription(descriptionInput, includeBody, function (description) {
+            // createNewTask has no description field (every task-creation
+            // path in this app, including its own web form, adds the
+            // description afterward via a separate field-update call, not
+            // at creation time) - set it as a follow-up request below
+            // instead of in this payload, which the backend would just
+            // silently ignore.
             var payload = { title: title };
-
-            if (description) payload.description = description;
 
             var deadlineDate = document.getElementById('taDeadline').value;
             var deadlineTime = selectedDeadlineTime();
@@ -447,20 +470,28 @@
                     if (result.ok && result.data && result.data.success !== false) {
                         var taskId = result.data.task && result.data.task.id;
 
-                        if (taskId && selectedAttachments.length) {
-                            uploadSelectedAttachments(taskId, selectedAttachments).then(function (summary) {
-                                var message = 'Úkol byl vytvořen.';
-                                if (summary.failed) {
-                                    message += ' ' + summary.ok + '/' + selectedAttachments.length + ' příloh se podařilo nahrát (' +
-                                        summary.failures.join('; ') + ').';
-                                    renderTaskForm(message, summary.ok ? 'success' : 'error');
-                                } else {
-                                    renderTaskForm(message + ' Všechny přílohy byly nahrány.', 'success');
-                                }
-                            });
-                        } else {
-                            renderTaskForm('Úkol byl vytvořen.', 'success');
-                        }
+                        var afterDescription = (taskId && description)
+                            ? setTaskDescription(taskId, description)
+                            : Promise.resolve(true);
+
+                        afterDescription.then(function (descriptionOk) {
+                            var baseMessage = 'Úkol byl vytvořen.' + (descriptionOk ? '' : ' Popis se nepodařilo uložit.');
+
+                            if (taskId && selectedAttachments.length) {
+                                uploadSelectedAttachments(taskId, selectedAttachments).then(function (summary) {
+                                    var message = baseMessage;
+                                    if (summary.failed) {
+                                        message += ' ' + summary.ok + '/' + selectedAttachments.length + ' příloh se podařilo nahrát (' +
+                                            summary.failures.join('; ') + ').';
+                                        renderTaskForm(message, summary.ok ? 'success' : 'error');
+                                    } else {
+                                        renderTaskForm(message + ' Všechny přílohy byly nahrány.', 'success');
+                                    }
+                                });
+                            } else {
+                                renderTaskForm(baseMessage, descriptionOk ? 'success' : 'error');
+                            }
+                        });
                     } else {
                         var message = (result.data && result.data.message) || 'Úkol se nepodařilo vytvořit.';
                         renderTaskForm(message, 'error');

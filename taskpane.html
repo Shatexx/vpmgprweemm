@@ -9,7 +9,14 @@
     <!-- Office.js - Microsoft's own CDN, required for any Office add-in, not self-hostable. -->
     <script type="text/javascript" src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
 
-    <link rel="stylesheet" href="taskpane.css?v=2">
+    <!-- ?v=N below must be bumped on every content change, in lockstep with
+         the SAME ?v=N on manifest.xml's SourceLocation/Commands.Url/
+         Taskpane.Url. Office/browser caching of this outer HTML page is
+         aggressive enough that versioning just the two files below isn't
+         enough on its own - if Outlook never re-fetches THIS page (because
+         its own URL, in the manifest, is unversioned/unchanged), it never
+         sees the updated references to them either. -->
+    <link rel="stylesheet" href="taskpane.css?v=3">
 </head>
 <body>
     <div id="root">
@@ -19,6 +26,6 @@
         </div>
     </div>
 
-    <script type="text/javascript" src="taskpane.js?v=2"></script>
+    <script type="text/javascript" src="taskpane.js?v=3"></script>
 </body>
 </html>
