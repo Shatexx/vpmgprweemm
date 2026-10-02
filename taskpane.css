@@ -36,7 +36,6 @@ label {
 
 input[type="text"],
 input[type="date"],
-input[type="time"],
 textarea,
 select {
     width: 100%;
@@ -51,7 +50,6 @@ select {
 
 input[type="text"]:focus,
 input[type="date"]:focus,
-input[type="time"]:focus,
 textarea:focus,
 select:focus {
     outline: none;
@@ -66,6 +64,25 @@ textarea {
 .ta-row {
     display: flex;
     gap: 10px;
+}
+
+/* Two plain <select> elements instead of a native <input type="time">
+   (see taskpane.js timeOptionsHtml()) - sized to content, not width:100%
+   like the shared select rule above, since these sit side by side. */
+.ta-time-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.ta-time-row select {
+    width: auto;
+    flex: 1;
+}
+
+.ta-time-sep {
+    font-weight: 700;
+    color: #64748b;
 }
 
 .ta-row > .ta-field {
@@ -217,7 +234,6 @@ body.ta-dark p.ta-subtitle {
 
 body.ta-dark input[type="text"],
 body.ta-dark input[type="date"],
-body.ta-dark input[type="time"],
 body.ta-dark textarea,
 body.ta-dark select {
     background: #2d2d2d;
@@ -227,18 +243,21 @@ body.ta-dark select {
 
 body.ta-dark input[type="text"]:focus,
 body.ta-dark input[type="date"]:focus,
-body.ta-dark input[type="time"]:focus,
 body.ta-dark textarea:focus,
 body.ta-dark select:focus {
     border-color: #3b82f6;
 }
 
-/* Date/time/select pickers render with the OS's own native chrome, which
-   stays light by default even on a dark page background - this is the
-   standard way to ask for the dark variant of that native UI. */
-body.ta-dark input[type="date"],
-body.ta-dark input[type="time"] {
+/* Date picker renders with the OS's own native chrome, which stays light
+   by default even on a dark page background - this is the standard way to
+   ask for the dark variant of that native UI. The time selects above are
+   plain <select> elements, already covered by the shared dark select rule. */
+body.ta-dark input[type="date"] {
     color-scheme: dark;
+}
+
+body.ta-dark .ta-time-sep {
+    color: #94a3b8;
 }
 
 body.ta-dark .ta-attachments-list {

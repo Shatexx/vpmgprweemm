@@ -154,18 +154,27 @@
 
     // Fetches one attachment's content from Outlook and uploads it straight
     // to the task's own attachments (not a comment) via the dedicated
-    // Outlook-add-in endpoint - resolves to true/false rather than
-    // rejecting, so Promise chains calling this never need their own
-    // per-item catch.
+    // Outlook-add-in endpoint - always resolves (never rejects) with
+    // { ok, reason }, so Promise chains calling this never need their own
+    // per-item catch, and failures carry an actual cause instead of just a
+    // bare count (console.warn'd too, for anyone with devtools open on the
+    // taskpane while diagnosing a report of "attachments don't work").
     function uploadOneAttachment(taskId, attachment) {
         return new Promise(function (resolve) {
             Office.context.mailbox.item.getAttachmentContentAsync(attachment.id, function (result) {
-                if (result.status !== Office.AsyncResultStatus.Succeeded ||
-                    result.value.format !== Office.MailboxEnums.AttachmentContentFormat.Base64) {
+                if (result.status !== Office.AsyncResultStatus.Succeeded) {
+                    var reason = 'nepodařilo se načíst přílohu z Outlooku' +
+                        (result.error ? ' (' + result.error.message + ')' : '');
+                    console.warn('Outlook add-in: attachment fetch failed for', attachment.name, result.error);
+                    resolve({ ok: false, reason: reason });
+                    return;
+                }
+
+                if (result.value.format !== Office.MailboxEnums.AttachmentContentFormat.Base64) {
                     // Cloud attachments (OneDrive links) and embedded-item
                     // attachments (forwarded emails) come back as a URL/EML
                     // instead of Base64 - not fetchable this way, skipped.
-                    resolve(false);
+                    resolve({ ok: false, reason: 'cloudová/vložená příloha není podporována' });
                     return;
                 }
 
@@ -181,9 +190,21 @@
                     },
                     body: formData,
                 })
-                    .then(function (response) { return response.ok; })
-                    .catch(function () { return false; })
-                    .then(resolve);
+                    .then(function (response) {
+                        if (response.ok) {
+                            resolve({ ok: true });
+                            return;
+                        }
+                        return response.json().catch(function () { return {}; }).then(function (data) {
+                            var reason = (data && data.message) || ('server vrátil chybu ' + response.status);
+                            console.warn('Outlook add-in: attachment upload failed for', attachment.name, response.status, data);
+                            resolve({ ok: false, reason: reason });
+                        });
+                    })
+                    .catch(function (err) {
+                        console.warn('Outlook add-in: attachment upload network error for', attachment.name, err);
+                        resolve({ ok: false, reason: 'síťová chyba při nahrávání' });
+                    });
             });
         });
     }
@@ -193,19 +214,46 @@
     // the VPN link at once.
     function uploadSelectedAttachments(taskId, attachments) {
         var okCount = 0;
-        var failCount = 0;
+        var failures = [];
 
         function next(index) {
             if (index >= attachments.length) {
-                return Promise.resolve({ ok: okCount, failed: failCount });
+                return Promise.resolve({ ok: okCount, failed: failures.length, failures: failures });
             }
-            return uploadOneAttachment(taskId, attachments[index]).then(function (success) {
-                if (success) okCount++; else failCount++;
+            return uploadOneAttachment(taskId, attachments[index]).then(function (result) {
+                if (result.ok) {
+                    okCount++;
+                } else {
+                    failures.push(attachments[index].name + ': ' + result.reason);
+                }
                 return next(index + 1);
             });
         }
 
         return next(0);
+    }
+
+    // A native <input type="time"> renders its EMPTY state as a non-blank
+    // "12:30"-looking segment placeholder on some Windows/Edge WebView2
+    // builds instead of a clean "--:--" - the exact issue that already
+    // forced a custom TmTimePicker in the main app. Using the same fix here
+    // (two plain <select> elements) rather than a native time input avoids
+    // the whole class of bug instead of re-hitting it in a second place.
+    function timeOptionsHtml(range) {
+        var html = '<option value="">--</option>';
+        for (var i = 0; i < range; i++) {
+            var value = i < 10 ? '0' + i : String(i);
+            html += '<option value="' + value + '">' + value + '</option>';
+        }
+        return html;
+    }
+
+    // Only a real "HH:MM" when BOTH segments are picked - matches the old
+    // single time-input's behavior where a half-filled time meant no time.
+    function selectedDeadlineTime() {
+        var hour = document.getElementById('taDeadlineHour').value;
+        var minute = document.getElementById('taDeadlineMinute').value;
+        return (hour && minute) ? (hour + ':' + minute) : '';
     }
 
     function loadAssignableUsers(selectEl) {
@@ -277,8 +325,12 @@
             '<input type="date" id="taDeadline">' +
             '</div>' +
             '<div class="ta-field">' +
-            '<label for="taDeadlineTime">Čas</label>' +
-            '<input type="time" id="taDeadlineTime">' +
+            '<label for="taDeadlineHour">Čas</label>' +
+            '<div class="ta-time-row">' +
+            '<select id="taDeadlineHour">' + timeOptionsHtml(24) + '</select>' +
+            '<span class="ta-time-sep">:</span>' +
+            '<select id="taDeadlineMinute">' + timeOptionsHtml(60) + '</select>' +
+            '</div>' +
             '</div>' +
             '</div>' +
             '<div class="ta-row">' +
@@ -354,7 +406,7 @@
             if (description) payload.description = description;
 
             var deadlineDate = document.getElementById('taDeadline').value;
-            var deadlineTime = document.getElementById('taDeadlineTime').value;
+            var deadlineTime = selectedDeadlineTime();
             if (deadlineDate) {
                 payload.deadline = deadlineTime ? (deadlineDate + ' ' + deadlineTime + ':00') : deadlineDate;
             }
@@ -399,7 +451,8 @@
                             uploadSelectedAttachments(taskId, selectedAttachments).then(function (summary) {
                                 var message = 'Úkol byl vytvořen.';
                                 if (summary.failed) {
-                                    message += ' ' + summary.ok + '/' + selectedAttachments.length + ' příloh se podařilo nahrát.';
+                                    message += ' ' + summary.ok + '/' + selectedAttachments.length + ' příloh se podařilo nahrát (' +
+                                        summary.failures.join('; ') + ').';
                                     renderTaskForm(message, summary.ok ? 'success' : 'error');
                                 } else {
                                     renderTaskForm(message + ' Všechny přílohy byly nahrány.', 'success');

@@ -89,13 +89,16 @@
         <bt:String id="TaskpaneButton.Tooltip" DefaultValue="Vytvořit nový úkol v Task Manageru z tohoto e-mailu"/>
       </bt:LongStrings>
     </Resources>
-    <!-- Nested V1.1 block, required for SupportsPinning (requirement set 1.5+).
-         Must be the LAST child of the V1.0 VersionOverrides element. Clients
-         that don't support 1.5 fall back to the plain V1.0 button above
-         (same behavior as before, just without the pin option). -->
+    <!-- Nested V1.1 block, required for SupportsPinning (requirement set
+         1.5+). Bumped to 1.8 since the taskpane also needs
+         getAttachmentContentAsync, which is a 1.8 API - declaring the real
+         floor here means Outlook won't even offer this richer button on a
+         client that can't run it. Must be the LAST child of the V1.0
+         VersionOverrides element. Clients below 1.8 fall back to the plain
+         V1.0 button above (same create-task flow as before, no pinning). -->
     <VersionOverrides xmlns="http://schemas.microsoft.com/office/mailappversionoverrides/1.1" xsi:type="VersionOverridesV1_1">
       <Requirements>
-        <bt:Sets DefaultMinVersion="1.5">
+        <bt:Sets DefaultMinVersion="1.8">
           <bt:Set Name="Mailbox" />
         </bt:Sets>
       </Requirements>
