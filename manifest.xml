@@ -11,7 +11,7 @@
   <Description DefaultValue="Vytvořte nový úkol v Task Manageru přímo z Outlooku."/>
   <IconUrl DefaultValue="https://shatexx.github.io/vpmgprweemm/assets/icon-32.png"/>
   <HighResolutionIconUrl DefaultValue="https://shatexx.github.io/vpmgprweemm/assets/icon-80.png"/>
-  <SupportUrl DefaultValue="https://shatexx.github.io/vpmgprweemm/taskpane.html?v=4"/>
+  <SupportUrl DefaultValue="https://shatexx.github.io/vpmgprweemm/taskpane.html?v=5"/>
   <AppDomains>
     <AppDomain>https://tm-bms.duckdns.org</AppDomain>
   </AppDomains>
@@ -26,7 +26,7 @@
   <FormSettings>
     <Form xsi:type="ItemRead">
       <DesktopSettings>
-        <SourceLocation DefaultValue="https://shatexx.github.io/vpmgprweemm/taskpane.html?v=4"/>
+        <SourceLocation DefaultValue="https://shatexx.github.io/vpmgprweemm/taskpane.html?v=5"/>
         <RequestedHeight>450</RequestedHeight>
       </DesktopSettings>
     </Form>
@@ -78,8 +78,8 @@
         <bt:Image id="Icon.80x80" DefaultValue="https://shatexx.github.io/vpmgprweemm/assets/icon-80.png"/>
       </bt:Images>
       <bt:Urls>
-        <bt:Url id="Commands.Url" DefaultValue="https://shatexx.github.io/vpmgprweemm/taskpane.html?v=4" />
-        <bt:Url id="Taskpane.Url" DefaultValue="https://shatexx.github.io/vpmgprweemm/taskpane.html?v=4" />
+        <bt:Url id="Commands.Url" DefaultValue="https://shatexx.github.io/vpmgprweemm/taskpane.html?v=5" />
+        <bt:Url id="Taskpane.Url" DefaultValue="https://shatexx.github.io/vpmgprweemm/taskpane.html?v=5" />
       </bt:Urls>
       <bt:ShortStrings>
         <bt:String id="GroupLabel" DefaultValue="Task Manager"/>
@@ -139,8 +139,8 @@
           <bt:Image id="Icon.80x80" DefaultValue="https://shatexx.github.io/vpmgprweemm/assets/icon-80.png"/>
         </bt:Images>
         <bt:Urls>
-          <bt:Url id="Commands.Url" DefaultValue="https://shatexx.github.io/vpmgprweemm/taskpane.html?v=4" />
-          <bt:Url id="Taskpane.Url" DefaultValue="https://shatexx.github.io/vpmgprweemm/taskpane.html?v=4" />
+          <bt:Url id="Commands.Url" DefaultValue="https://shatexx.github.io/vpmgprweemm/taskpane.html?v=5" />
+          <bt:Url id="Taskpane.Url" DefaultValue="https://shatexx.github.io/vpmgprweemm/taskpane.html?v=5" />
         </bt:Urls>
         <bt:ShortStrings>
           <bt:String id="GroupLabel" DefaultValue="Task Manager"/>

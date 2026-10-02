@@ -152,13 +152,41 @@
         return new Blob([new Uint8Array(byteNumbers)], { type: contentType || 'application/octet-stream' });
     }
 
-    // Fetches one attachment's content from Outlook and uploads it straight
-    // to the task's own attachments (not a comment) via the dedicated
-    // Outlook-add-in endpoint - always resolves (never rejects) with
-    // { ok, reason }, so Promise chains calling this never need their own
-    // per-item catch, and failures carry an actual cause instead of just a
-    // bare count (console.warn'd too, for anyone with devtools open on the
-    // taskpane while diagnosing a report of "attachments don't work").
+    // Shared by every "upload a file onto this task's attachments" path
+    // (real Outlook attachments and the synthesized .eml below) - always
+    // resolves (never rejects) with { ok, reason }, so callers never need
+    // their own catch, and failures carry an actual cause instead of just
+    // a bare count (console.warn'd too, for anyone with devtools open on
+    // the taskpane while diagnosing a report of "attachments don't work").
+    function uploadBlobToTask(taskId, blob, filename) {
+        var formData = new FormData();
+        formData.append('attachments[]', blob, filename);
+
+        return fetch(API_BASE + '/api/outlook-addin/tasks/' + taskId + '/attachments', {
+            method: 'POST',
+            headers: {
+                Accept: 'application/json',
+                Authorization: 'Bearer ' + getToken(),
+            },
+            body: formData,
+        })
+            .then(function (response) {
+                if (response.ok) return { ok: true };
+
+                return response.json().catch(function () { return {}; }).then(function (data) {
+                    var reason = (data && data.message) || ('server vrátil chybu ' + response.status);
+                    console.warn('Outlook add-in: upload failed for', filename, response.status, data);
+                    return { ok: false, reason: reason };
+                });
+            })
+            .catch(function (err) {
+                console.warn('Outlook add-in: upload network error for', filename, err);
+                return { ok: false, reason: 'síťová chyba při nahrávání' };
+            });
+    }
+
+    // Fetches one real Outlook attachment's content and uploads it onto
+    // the task's own attachments (not a comment) via uploadBlobToTask.
     function uploadOneAttachment(taskId, attachment) {
         return new Promise(function (resolve) {
             Office.context.mailbox.item.getAttachmentContentAsync(attachment.id, function (result) {
@@ -179,52 +207,81 @@
                 }
 
                 var blob = base64ToBlob(result.value.content, attachment.contentType);
-                var formData = new FormData();
-                formData.append('attachments[]', blob, attachment.name);
-
-                fetch(API_BASE + '/api/outlook-addin/tasks/' + taskId + '/attachments', {
-                    method: 'POST',
-                    headers: {
-                        Accept: 'application/json',
-                        Authorization: 'Bearer ' + getToken(),
-                    },
-                    body: formData,
-                })
-                    .then(function (response) {
-                        if (response.ok) {
-                            resolve({ ok: true });
-                            return;
-                        }
-                        return response.json().catch(function () { return {}; }).then(function (data) {
-                            var reason = (data && data.message) || ('server vrátil chybu ' + response.status);
-                            console.warn('Outlook add-in: attachment upload failed for', attachment.name, response.status, data);
-                            resolve({ ok: false, reason: reason });
-                        });
-                    })
-                    .catch(function (err) {
-                        console.warn('Outlook add-in: attachment upload network error for', attachment.name, err);
-                        resolve({ ok: false, reason: 'síťová chyba při nahrávání' });
-                    });
+                uploadBlobToTask(taskId, blob, attachment.name).then(resolve);
             });
+        });
+    }
+
+    // Formats a message-header address ("Name" <email>) from Office.js's
+    // EmailAddressDetails shape - used for the reconstructed .eml below.
+    function emlAddress(recipient) {
+        if (!recipient) return '';
+        var name = recipient.displayName || '';
+        var email = recipient.emailAddress || '';
+        return name ? '"' + name.replace(/"/g, "'") + '" <' + email + '>' : email;
+    }
+
+    // Not a true .msg (Outlook's own proprietary format isn't obtainable
+    // through any web API - confirmed before building this) - a real .eml
+    // instead, reconstructed from the properties Office.js already gives
+    // this add-in (same read permission already granted, no extra auth).
+    // Outlook opens .eml files natively, same as a normal received email.
+    // Resolves to a Blob; never rejects (falls back to an empty body on a
+    // body-fetch failure rather than skipping the attachment entirely).
+    function buildEmailEmlBlob() {
+        return new Promise(function (resolve) {
+            var item = Office.context.mailbox.item;
+
+            item.body.getAsync(Office.CoercionType.Html, function (result) {
+                var bodyHtml = result.status === Office.AsyncResultStatus.Succeeded ? result.value : '';
+                var dateHeader = (item.dateTimeCreated instanceof Date) ? item.dateTimeCreated.toUTCString() : new Date().toUTCString();
+                var toLine = (item.to || []).map(emlAddress).join(', ');
+                var ccLine = (item.cc || []).map(emlAddress).join(', ');
+
+                var eml =
+                    'From: ' + emlAddress(item.from) + '\r\n' +
+                    'To: ' + toLine + '\r\n' +
+                    (ccLine ? 'Cc: ' + ccLine + '\r\n' : '') +
+                    'Subject: ' + (item.subject || '') + '\r\n' +
+                    'Date: ' + dateHeader + '\r\n' +
+                    'MIME-Version: 1.0\r\n' +
+                    'Content-Type: text/html; charset="utf-8"\r\n' +
+                    'Content-Transfer-Encoding: 8bit\r\n' +
+                    '\r\n' +
+                    bodyHtml;
+
+                resolve(new Blob([eml], { type: 'message/rfc822' }));
+            });
+        });
+    }
+
+    function uploadEmailAsEml(taskId) {
+        return buildEmailEmlBlob().then(function (blob) {
+            var filename = (Office.context.mailbox.item.subject || 'email').replace(/[\\/:*?"<>|]/g, '_').slice(0, 100) + '.eml';
+            return uploadBlobToTask(taskId, blob, filename);
         });
     }
 
     // Uploads selected attachments one at a time (not Promise.all) - keeps
     // ordering deterministic and avoids firing several large uploads over
     // the VPN link at once.
-    function uploadSelectedAttachments(taskId, attachments) {
+    // items: [{ name, upload: function(taskId) -> Promise<{ok, reason}> }] -
+    // one list covering both the synthesized .eml and any real selected
+    // attachments, so they share a single combined success/failure summary
+    // instead of two separate messages.
+    function uploadSequential(taskId, items) {
         var okCount = 0;
         var failures = [];
 
         function next(index) {
-            if (index >= attachments.length) {
-                return Promise.resolve({ ok: okCount, failed: failures.length, failures: failures });
+            if (index >= items.length) {
+                return Promise.resolve({ ok: okCount, failed: failures.length, failures: failures, total: items.length });
             }
-            return uploadOneAttachment(taskId, attachments[index]).then(function (result) {
+            return items[index].upload(taskId).then(function (result) {
                 if (result.ok) {
                     okCount++;
                 } else {
-                    failures.push(attachments[index].name + ': ' + result.reason);
+                    failures.push(items[index].name + ': ' + result.reason);
                 }
                 return next(index + 1);
             });
@@ -335,8 +392,8 @@
             '<textarea id="taDescription"></textarea>' +
             '</div>' +
             '<label class="ta-checkbox-field">' +
-            '<input type="checkbox" id="taIncludeBody">' +
-            '<span>Vložit text e-mailu do popisu</span>' +
+            '<input type="checkbox" id="taAttachEmail">' +
+            '<span>Přiložit celý e-mail jako přílohu (.eml)</span>' +
             '</label>' +
             '<div class="ta-row">' +
             '<div class="ta-field">' +
@@ -384,26 +441,6 @@
         document.getElementById('taTitle').focus();
     }
 
-    // Only fetched when the user opts in (the checkbox is unchecked by
-    // default) - item.body.getAsync is async, unlike .subject, so this has
-    // to happen before the create-task request is built, not inline in the
-    // payload construction below.
-    function withDescription(baseDescription, includeBody, callback) {
-        if (!includeBody) {
-            callback(baseDescription);
-            return;
-        }
-
-        try {
-            Office.context.mailbox.item.body.getAsync(Office.CoercionType.Text, function (result) {
-                var bodyText = result.status === Office.AsyncResultStatus.Succeeded ? result.value.trim() : '';
-                callback(bodyText ? (baseDescription ? baseDescription + '\n\n---\n\n' + bodyText : bodyText) : baseDescription);
-            });
-        } catch (e) {
-            callback(baseDescription);
-        }
-    }
-
     function submitTask() {
         var title = document.getElementById('taTitle').value.trim();
         if (!title) {
@@ -415,95 +452,103 @@
         saveBtn.disabled = true;
         saveBtn.textContent = 'Ukládání…';
 
-        var descriptionInput = document.getElementById('taDescription').value.trim();
-        var includeBody = document.getElementById('taIncludeBody').checked;
+        var description = document.getElementById('taDescription').value.trim();
+        var attachEmail = document.getElementById('taAttachEmail').checked;
         var selectedAttachments = getSelectedAttachments();
 
-        withDescription(descriptionInput, includeBody, function (description) {
-            // createNewTask has no description field (every task-creation
-            // path in this app, including its own web form, adds the
-            // description afterward via a separate field-update call, not
-            // at creation time) - set it as a follow-up request below
-            // instead of in this payload, which the backend would just
-            // silently ignore.
-            var payload = { title: title };
+        // createNewTask has no description field (every task-creation path
+        // in this app, including its own web form, adds the description
+        // afterward via a separate field-update call, not at creation
+        // time) - set it as a follow-up request below instead of in this
+        // payload, which the backend would just silently ignore.
+        var payload = { title: title };
 
-            var deadlineDate = document.getElementById('taDeadline').value;
-            var deadlineTime = selectedDeadlineTime();
-            if (deadlineDate) {
-                payload.deadline = deadlineTime ? (deadlineDate + ' ' + deadlineTime + ':00') : deadlineDate;
-            }
+        var deadlineDate = document.getElementById('taDeadline').value;
+        var deadlineTime = selectedDeadlineTime();
+        if (deadlineDate) {
+            payload.deadline = deadlineTime ? (deadlineDate + ' ' + deadlineTime + ':00') : deadlineDate;
+        }
 
-            var priority = document.getElementById('taPriority').value;
-            if (priority) payload.priority = priority;
+        var priority = document.getElementById('taPriority').value;
+        if (priority) payload.priority = priority;
 
-            var assignee = document.getElementById('taAssignee').value;
-            if (assignee) payload.assigned_user_id = assignee;
+        var assignee = document.getElementById('taAssignee').value;
+        if (assignee) payload.assigned_user_id = assignee;
 
-            fetch(API_BASE + '/api/outlook-addin/tasks', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    Accept: 'application/json',
-                    Authorization: 'Bearer ' + getToken(),
-                },
-                body: JSON.stringify(payload),
-            })
-                .then(function (response) {
-                    if (response.status === 401) {
-                        // Token missing/revoked/expired - clear it locally too,
-                        // so the next open goes straight to re-pairing instead
-                        // of repeating the same failed request.
-                        clearToken(function () {
-                            renderTokenScreen('Token již neplatí. Vygenerujte nový v Task Manageru a vložte ho znovu.');
-                        });
-                        return null;
-                    }
-
-                    return response.json().then(function (data) {
-                        return { ok: response.ok, data: data };
+        fetch(API_BASE + '/api/outlook-addin/tasks', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                Accept: 'application/json',
+                Authorization: 'Bearer ' + getToken(),
+            },
+            body: JSON.stringify(payload),
+        })
+            .then(function (response) {
+                if (response.status === 401) {
+                    // Token missing/revoked/expired - clear it locally too,
+                    // so the next open goes straight to re-pairing instead
+                    // of repeating the same failed request.
+                    clearToken(function () {
+                        renderTokenScreen('Token již neplatí. Vygenerujte nový v Task Manageru a vložte ho znovu.');
                     });
-                })
-                .then(function (result) {
-                    if (!result) return; // 401 path already handled above
+                    return null;
+                }
 
-                    if (result.ok && result.data && result.data.success !== false) {
-                        var taskId = result.data.task && result.data.task.id;
-
-                        var afterDescription = (taskId && description)
-                            ? setTaskDescription(taskId, description)
-                            : Promise.resolve(true);
-
-                        afterDescription.then(function (descriptionOk) {
-                            var baseMessage = 'Úkol byl vytvořen.' + (descriptionOk ? '' : ' Popis se nepodařilo uložit.');
-
-                            if (taskId && selectedAttachments.length) {
-                                uploadSelectedAttachments(taskId, selectedAttachments).then(function (summary) {
-                                    var message = baseMessage;
-                                    if (summary.failed) {
-                                        message += ' ' + summary.ok + '/' + selectedAttachments.length + ' příloh se podařilo nahrát (' +
-                                            summary.failures.join('; ') + ').';
-                                        renderTaskForm(message, summary.ok ? 'success' : 'error');
-                                    } else {
-                                        renderTaskForm(message + ' Všechny přílohy byly nahrány.', 'success');
-                                    }
-                                });
-                            } else {
-                                renderTaskForm(baseMessage, descriptionOk ? 'success' : 'error');
-                            }
-                        });
-                    } else {
-                        var message = (result.data && result.data.message) || 'Úkol se nepodařilo vytvořit.';
-                        renderTaskForm(message, 'error');
-                    }
-                })
-                .catch(function () {
-                    renderTaskForm(
-                        'Nepodařilo se spojit s Task Managerem. Ujistěte se, že jste připojeni k firemní síti/VPN.',
-                        'error'
-                    );
+                return response.json().then(function (data) {
+                    return { ok: response.ok, data: data };
                 });
-        });
+            })
+            .then(function (result) {
+                if (!result) return; // 401 path already handled above
+
+                if (result.ok && result.data && result.data.success !== false) {
+                    var taskId = result.data.task && result.data.task.id;
+
+                    var afterDescription = (taskId && description)
+                        ? setTaskDescription(taskId, description)
+                        : Promise.resolve(true);
+
+                    afterDescription.then(function (descriptionOk) {
+                        var baseMessage = 'Úkol byl vytvořen.' + (descriptionOk ? '' : ' Popis se nepodařilo uložit.');
+
+                        var uploadItems = [];
+                        if (attachEmail) {
+                            uploadItems.push({ name: 'e-mail (.eml)', upload: uploadEmailAsEml });
+                        }
+                        selectedAttachments.forEach(function (attachment) {
+                            uploadItems.push({
+                                name: attachment.name,
+                                upload: function (id) { return uploadOneAttachment(id, attachment); },
+                            });
+                        });
+
+                        if (taskId && uploadItems.length) {
+                            uploadSequential(taskId, uploadItems).then(function (summary) {
+                                var message = baseMessage;
+                                if (summary.failed) {
+                                    message += ' ' + summary.ok + '/' + summary.total + ' příloh se podařilo nahrát (' +
+                                        summary.failures.join('; ') + ').';
+                                    renderTaskForm(message, summary.ok ? 'success' : 'error');
+                                } else {
+                                    renderTaskForm(message + ' Všechny přílohy byly nahrány.', 'success');
+                                }
+                            });
+                        } else {
+                            renderTaskForm(baseMessage, descriptionOk ? 'success' : 'error');
+                        }
+                    });
+                } else {
+                    var message = (result.data && result.data.message) || 'Úkol se nepodařilo vytvořit.';
+                    renderTaskForm(message, 'error');
+                }
+            })
+            .catch(function () {
+                renderTaskForm(
+                    'Nepodařilo se spojit s Task Managerem. Ujistěte se, že jste připojeni k firemní síti/VPN.',
+                    'error'
+                );
+            });
     }
 
     // ── Entry point ──────────────────────────────────────────────────────
