@@ -155,3 +155,70 @@ button.ta-link {
     margin-top: 16px;
     text-align: center;
 }
+
+/* Dark mode - toggled on <body> by taskpane.js based on Outlook's own
+   theme (or the OS preference as a fallback). Outlook doesn't expose a
+   plain dark/light flag the way other Office hosts do, so this can't be a
+   prefers-color-scheme media query alone - it has to be driven from JS. */
+body.ta-dark {
+    color: #e2e8f0;
+    background: #1e1e1e;
+}
+
+body.ta-dark p.ta-subtitle {
+    color: #94a3b8;
+}
+
+body.ta-dark input[type="text"],
+body.ta-dark input[type="date"],
+body.ta-dark textarea,
+body.ta-dark select {
+    background: #2d2d2d;
+    border-color: #3f3f3f;
+    color: #e2e8f0;
+}
+
+body.ta-dark input[type="text"]:focus,
+body.ta-dark input[type="date"]:focus,
+body.ta-dark textarea:focus,
+body.ta-dark select:focus {
+    border-color: #3b82f6;
+}
+
+/* Date/select pickers render with the OS's own native chrome, which stays
+   light by default even on a dark page background - this is the standard
+   way to ask for the dark variant of that native UI. */
+body.ta-dark input[type="date"] {
+    color-scheme: dark;
+}
+
+body.ta-dark button.ta-secondary {
+    background: #2d2d2d;
+    border-color: #3f3f3f;
+    color: #e2e8f0;
+}
+
+body.ta-dark button.ta-link {
+    color: #94a3b8;
+}
+
+body.ta-dark .ta-loading {
+    color: #94a3b8;
+}
+
+body.ta-dark .ta-spinner {
+    border-color: #3f3f3f;
+    border-top-color: #3b82f6;
+}
+
+body.ta-dark .ta-message.ta-error {
+    background: #3f1d1d;
+    color: #fca5a5;
+    border-color: #5c2626;
+}
+
+body.ta-dark .ta-message.ta-success {
+    background: #142e1a;
+    color: #86efac;
+    border-color: #1f4b2a;
+}

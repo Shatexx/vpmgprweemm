@@ -38,6 +38,43 @@
         return div.innerHTML;
     }
 
+    // Outlook doesn't populate officeTheme.isDarkTheme (that only works on
+    // other Office hosts) - darkness has to be derived from the actual
+    // background color Outlook reports instead. Falls back to the OS/
+    // browser's own color-scheme preference when officeTheme isn't
+    // available at all (older clients, or hosts where this API is known to
+    // be unreliable, e.g. classic Outlook desktop on Mac).
+    function isDarkTheme() {
+        try {
+            var bg = Office.context && Office.context.officeTheme && Office.context.officeTheme.bodyBackgroundColor;
+            if (bg) {
+                var hex = bg.replace('#', '');
+                if (hex.length === 3) {
+                    hex = hex[0] + hex[0] + hex[1] + hex[1] + hex[2] + hex[2];
+                }
+                if (hex.length === 6) {
+                    var r = parseInt(hex.substring(0, 2), 16);
+                    var g = parseInt(hex.substring(2, 4), 16);
+                    var b = parseInt(hex.substring(4, 6), 16);
+                    // Standard relative-luminance weighting, not a plain
+                    // average - matches how perceived brightness actually
+                    // works (green reads brighter than blue at the same
+                    // numeric value).
+                    var luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+                    return luminance < 0.5;
+                }
+            }
+        } catch (e) {
+            // officeTheme not available in this host/version - fall through.
+        }
+
+        return !!(window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
+    }
+
+    function applyTheme() {
+        document.body.classList.toggle('ta-dark', isDarkTheme());
+    }
+
     // ── Token screen ─────────────────────────────────────────────────────
 
     function renderTokenScreen(message) {
@@ -183,6 +220,26 @@
 
     Office.onReady(function () {
         try {
+            applyTheme();
+
+            // Best-effort: keep the theme in sync if the user switches
+            // Outlook's theme while the pane is already open. Isolated in
+            // its own try/catch - if this specific API isn't available on
+            // some host/version, the pane should still render correctly
+            // with whatever theme it detected at open time, not show an
+            // error screen over a live-update nicety.
+            try {
+                if (Office.context && Office.context.officeTheme && typeof Office.addHandlerAsync === 'function') {
+                    Office.addHandlerAsync(Office.EventType.OfficeThemeChanged, applyTheme);
+                }
+            } catch (themeHandlerError) {
+                // Not supported on this host/version - already-applied
+                // initial theme stands, nothing more to do.
+            }
+            if (window.matchMedia) {
+                window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', applyTheme);
+            }
+
             if (getToken()) {
                 renderTaskForm();
             } else {
