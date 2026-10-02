@@ -112,7 +112,149 @@
         return '';
     }
 
+    // Real (non-signature/embedded-image) attachments on the current email -
+    // a plain synchronous property in Outlook read mode, same as .subject
+    // above, no async call needed just to list them.
+    function currentAttachments() {
+        try {
+            var item = Office.context.mailbox && Office.context.mailbox.item;
+            if (item && item.attachments) {
+                return item.attachments.filter(function (a) { return !a.isInline; });
+            }
+        } catch (e) {
+            // No item in context - same as currentSubject() above.
+        }
+        return [];
+    }
+
+    // Above this, getAttachmentContentAsync becomes slow/likely to fail in
+    // practice (no hard documented ceiling from Office.js itself - this is
+    // a UI hint, not an enforced limit, so an oversized file still gets
+    // attempted, just with a warning shown up front).
+    var ATTACHMENT_WARN_BYTES = 3 * 1024 * 1024;
+
+    function getSelectedAttachments() {
+        return Array.prototype.slice.call(document.querySelectorAll('.taAttachmentCheckbox:checked')).map(function (cb) {
+            return {
+                id: cb.getAttribute('data-att-id'),
+                name: cb.getAttribute('data-att-name'),
+                contentType: cb.getAttribute('data-att-content-type') || '',
+            };
+        });
+    }
+
+    function base64ToBlob(base64, contentType) {
+        var byteChars = atob(base64);
+        var byteNumbers = new Array(byteChars.length);
+        for (var i = 0; i < byteChars.length; i++) {
+            byteNumbers[i] = byteChars.charCodeAt(i);
+        }
+        return new Blob([new Uint8Array(byteNumbers)], { type: contentType || 'application/octet-stream' });
+    }
+
+    // Fetches one attachment's content from Outlook and uploads it straight
+    // to the task's own attachments (not a comment) via the dedicated
+    // Outlook-add-in endpoint - resolves to true/false rather than
+    // rejecting, so Promise chains calling this never need their own
+    // per-item catch.
+    function uploadOneAttachment(taskId, attachment) {
+        return new Promise(function (resolve) {
+            Office.context.mailbox.item.getAttachmentContentAsync(attachment.id, function (result) {
+                if (result.status !== Office.AsyncResultStatus.Succeeded ||
+                    result.value.format !== Office.MailboxEnums.AttachmentContentFormat.Base64) {
+                    // Cloud attachments (OneDrive links) and embedded-item
+                    // attachments (forwarded emails) come back as a URL/EML
+                    // instead of Base64 - not fetchable this way, skipped.
+                    resolve(false);
+                    return;
+                }
+
+                var blob = base64ToBlob(result.value.content, attachment.contentType);
+                var formData = new FormData();
+                formData.append('attachments[]', blob, attachment.name);
+
+                fetch(API_BASE + '/api/outlook-addin/tasks/' + taskId + '/attachments', {
+                    method: 'POST',
+                    headers: {
+                        Accept: 'application/json',
+                        Authorization: 'Bearer ' + getToken(),
+                    },
+                    body: formData,
+                })
+                    .then(function (response) { return response.ok; })
+                    .catch(function () { return false; })
+                    .then(resolve);
+            });
+        });
+    }
+
+    // Uploads selected attachments one at a time (not Promise.all) - keeps
+    // ordering deterministic and avoids firing several large uploads over
+    // the VPN link at once.
+    function uploadSelectedAttachments(taskId, attachments) {
+        var okCount = 0;
+        var failCount = 0;
+
+        function next(index) {
+            if (index >= attachments.length) {
+                return Promise.resolve({ ok: okCount, failed: failCount });
+            }
+            return uploadOneAttachment(taskId, attachments[index]).then(function (success) {
+                if (success) okCount++; else failCount++;
+                return next(index + 1);
+            });
+        }
+
+        return next(0);
+    }
+
+    function loadAssignableUsers(selectEl) {
+        fetch(API_BASE + '/api/outlook-addin/users', {
+            headers: {
+                Accept: 'application/json',
+                Authorization: 'Bearer ' + getToken(),
+            },
+        })
+            .then(function (response) { return response.ok ? response.json() : null; })
+            .then(function (data) {
+                if (!data || !data.users || !document.body.contains(selectEl)) return;
+                data.users.forEach(function (user) {
+                    var option = document.createElement('option');
+                    option.value = user.id;
+                    option.textContent = user.name;
+                    selectEl.appendChild(option);
+                });
+            })
+            .catch(function () {
+                // Non-blocking - assignee picker just stays at "Já (výchozí)".
+            });
+    }
+
     function renderTaskForm(statusMessage, statusType) {
+        var attachments = currentAttachments();
+        var attachmentsFieldHtml = '';
+
+        if (attachments.length) {
+            attachmentsFieldHtml =
+                '<div class="ta-field">' +
+                '<label>Přílohy e-mailu</label>' +
+                '<div class="ta-attachments-list">' +
+                attachments.map(function (a) {
+                    var warning = a.size > ATTACHMENT_WARN_BYTES
+                        ? ' <span class="ta-att-warning">(velký soubor, nahrání může selhat)</span>'
+                        : '';
+                    return '<label class="ta-attachment-item">' +
+                        '<input type="checkbox" class="taAttachmentCheckbox"' +
+                        ' data-att-id="' + escapeHtml(a.id) + '"' +
+                        ' data-att-name="' + escapeHtml(a.name) + '"' +
+                        ' data-att-content-type="' + escapeHtml(a.contentType) + '">' +
+                        '<span>' + escapeHtml(a.name) + warning + '</span>' +
+                        '</label>';
+                }).join('') +
+                '</div>' +
+                '</div>';
+        }
+
         root.innerHTML =
             '<h1>Nový úkol</h1>' +
             '<p class="ta-subtitle">Vytvořit úkol v BMS Task Manageru.</p>' +
@@ -125,11 +267,21 @@
             '<label for="taDescription">Popis</label>' +
             '<textarea id="taDescription"></textarea>' +
             '</div>' +
+            '<label class="ta-checkbox-field">' +
+            '<input type="checkbox" id="taIncludeBody">' +
+            '<span>Vložit text e-mailu do popisu</span>' +
+            '</label>' +
             '<div class="ta-row">' +
             '<div class="ta-field">' +
             '<label for="taDeadline">Termín</label>' +
             '<input type="date" id="taDeadline">' +
             '</div>' +
+            '<div class="ta-field">' +
+            '<label for="taDeadlineTime">Čas</label>' +
+            '<input type="time" id="taDeadlineTime">' +
+            '</div>' +
+            '</div>' +
+            '<div class="ta-row">' +
             '<div class="ta-field">' +
             '<label for="taPriority">Priorita</label>' +
             '<select id="taPriority">' +
@@ -138,7 +290,14 @@
             '<option value="High">Vysoká</option>' +
             '</select>' +
             '</div>' +
+            '<div class="ta-field">' +
+            '<label for="taAssignee">Přiřazeno</label>' +
+            '<select id="taAssignee">' +
+            '<option value="">Já (výchozí)</option>' +
+            '</select>' +
             '</div>' +
+            '</div>' +
+            attachmentsFieldHtml +
             '<button type="button" class="ta-primary" id="taSaveTaskBtn">Vytvořit úkol</button>' +
             '<div class="ta-footer-link"><button type="button" class="ta-link" id="taChangeTokenBtn">Změnit token</button></div>';
 
@@ -149,7 +308,29 @@
             });
         });
 
+        loadAssignableUsers(document.getElementById('taAssignee'));
+
         document.getElementById('taTitle').focus();
+    }
+
+    // Only fetched when the user opts in (the checkbox is unchecked by
+    // default) - item.body.getAsync is async, unlike .subject, so this has
+    // to happen before the create-task request is built, not inline in the
+    // payload construction below.
+    function withDescription(baseDescription, includeBody, callback) {
+        if (!includeBody) {
+            callback(baseDescription);
+            return;
+        }
+
+        try {
+            Office.context.mailbox.item.body.getAsync(Office.CoercionType.Text, function (result) {
+                var bodyText = result.status === Office.AsyncResultStatus.Succeeded ? result.value.trim() : '';
+                callback(bodyText ? (baseDescription ? baseDescription + '\n\n---\n\n' + bodyText : bodyText) : baseDescription);
+            });
+        } catch (e) {
+            callback(baseDescription);
+        }
     }
 
     function submitTask() {
@@ -163,57 +344,82 @@
         saveBtn.disabled = true;
         saveBtn.textContent = 'Ukládání…';
 
-        var payload = { title: title };
+        var descriptionInput = document.getElementById('taDescription').value.trim();
+        var includeBody = document.getElementById('taIncludeBody').checked;
+        var selectedAttachments = getSelectedAttachments();
 
-        var description = document.getElementById('taDescription').value.trim();
-        if (description) payload.description = description;
+        withDescription(descriptionInput, includeBody, function (description) {
+            var payload = { title: title };
 
-        var deadline = document.getElementById('taDeadline').value;
-        if (deadline) payload.deadline = deadline;
+            if (description) payload.description = description;
 
-        var priority = document.getElementById('taPriority').value;
-        if (priority) payload.priority = priority;
+            var deadlineDate = document.getElementById('taDeadline').value;
+            var deadlineTime = document.getElementById('taDeadlineTime').value;
+            if (deadlineDate) {
+                payload.deadline = deadlineTime ? (deadlineDate + ' ' + deadlineTime + ':00') : deadlineDate;
+            }
 
-        fetch(API_BASE + '/api/outlook-addin/tasks', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                Accept: 'application/json',
-                Authorization: 'Bearer ' + getToken(),
-            },
-            body: JSON.stringify(payload),
-        })
-            .then(function (response) {
-                if (response.status === 401) {
-                    // Token missing/revoked/expired - clear it locally too,
-                    // so the next open goes straight to re-pairing instead
-                    // of repeating the same failed request.
-                    clearToken(function () {
-                        renderTokenScreen('Token již neplatí. Vygenerujte nový v Task Manageru a vložte ho znovu.');
+            var priority = document.getElementById('taPriority').value;
+            if (priority) payload.priority = priority;
+
+            var assignee = document.getElementById('taAssignee').value;
+            if (assignee) payload.assigned_user_id = assignee;
+
+            fetch(API_BASE + '/api/outlook-addin/tasks', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    Accept: 'application/json',
+                    Authorization: 'Bearer ' + getToken(),
+                },
+                body: JSON.stringify(payload),
+            })
+                .then(function (response) {
+                    if (response.status === 401) {
+                        // Token missing/revoked/expired - clear it locally too,
+                        // so the next open goes straight to re-pairing instead
+                        // of repeating the same failed request.
+                        clearToken(function () {
+                            renderTokenScreen('Token již neplatí. Vygenerujte nový v Task Manageru a vložte ho znovu.');
+                        });
+                        return null;
+                    }
+
+                    return response.json().then(function (data) {
+                        return { ok: response.ok, data: data };
                     });
-                    return null;
-                }
+                })
+                .then(function (result) {
+                    if (!result) return; // 401 path already handled above
 
-                return response.json().then(function (data) {
-                    return { ok: response.ok, data: data };
+                    if (result.ok && result.data && result.data.success !== false) {
+                        var taskId = result.data.task && result.data.task.id;
+
+                        if (taskId && selectedAttachments.length) {
+                            uploadSelectedAttachments(taskId, selectedAttachments).then(function (summary) {
+                                var message = 'Úkol byl vytvořen.';
+                                if (summary.failed) {
+                                    message += ' ' + summary.ok + '/' + selectedAttachments.length + ' příloh se podařilo nahrát.';
+                                    renderTaskForm(message, summary.ok ? 'success' : 'error');
+                                } else {
+                                    renderTaskForm(message + ' Všechny přílohy byly nahrány.', 'success');
+                                }
+                            });
+                        } else {
+                            renderTaskForm('Úkol byl vytvořen.', 'success');
+                        }
+                    } else {
+                        var message = (result.data && result.data.message) || 'Úkol se nepodařilo vytvořit.';
+                        renderTaskForm(message, 'error');
+                    }
+                })
+                .catch(function () {
+                    renderTaskForm(
+                        'Nepodařilo se spojit s Task Managerem. Ujistěte se, že jste připojeni k firemní síti/VPN.',
+                        'error'
+                    );
                 });
-            })
-            .then(function (result) {
-                if (!result) return; // 401 path already handled above
-
-                if (result.ok && result.data && result.data.success !== false) {
-                    renderTaskForm('Úkol byl vytvořen.', 'success');
-                } else {
-                    var message = (result.data && result.data.message) || 'Úkol se nepodařilo vytvořit.';
-                    renderTaskForm(message, 'error');
-                }
-            })
-            .catch(function () {
-                renderTaskForm(
-                    'Nepodařilo se spojit s Task Managerem. Ujistěte se, že jste připojeni k firemní síti/VPN.',
-                    'error'
-                );
-            });
+        });
     }
 
     // ── Entry point ──────────────────────────────────────────────────────

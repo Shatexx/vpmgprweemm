@@ -36,6 +36,7 @@ label {
 
 input[type="text"],
 input[type="date"],
+input[type="time"],
 textarea,
 select {
     width: 100%;
@@ -50,6 +51,7 @@ select {
 
 input[type="text"]:focus,
 input[type="date"]:focus,
+input[type="time"]:focus,
 textarea:focus,
 select:focus {
     outline: none;
@@ -68,6 +70,50 @@ textarea {
 
 .ta-row > .ta-field {
     flex: 1;
+}
+
+.ta-checkbox-field {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    margin-bottom: 12px;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.ta-checkbox-field input[type="checkbox"] {
+    width: auto;
+    margin: 0;
+}
+
+.ta-attachments-list {
+    max-height: 120px;
+    overflow-y: auto;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    padding: 6px 10px;
+}
+
+.ta-attachment-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 7px;
+    font-size: 12px;
+    font-weight: 500;
+    padding: 4px 0;
+    cursor: pointer;
+}
+
+.ta-attachment-item input[type="checkbox"] {
+    width: auto;
+    margin: 2px 0 0;
+    flex-shrink: 0;
+}
+
+.ta-att-warning {
+    color: #b45309;
+    font-weight: 500;
 }
 
 button {
@@ -171,6 +217,7 @@ body.ta-dark p.ta-subtitle {
 
 body.ta-dark input[type="text"],
 body.ta-dark input[type="date"],
+body.ta-dark input[type="time"],
 body.ta-dark textarea,
 body.ta-dark select {
     background: #2d2d2d;
@@ -180,16 +227,26 @@ body.ta-dark select {
 
 body.ta-dark input[type="text"]:focus,
 body.ta-dark input[type="date"]:focus,
+body.ta-dark input[type="time"]:focus,
 body.ta-dark textarea:focus,
 body.ta-dark select:focus {
     border-color: #3b82f6;
 }
 
-/* Date/select pickers render with the OS's own native chrome, which stays
-   light by default even on a dark page background - this is the standard
-   way to ask for the dark variant of that native UI. */
-body.ta-dark input[type="date"] {
+/* Date/time/select pickers render with the OS's own native chrome, which
+   stays light by default even on a dark page background - this is the
+   standard way to ask for the dark variant of that native UI. */
+body.ta-dark input[type="date"],
+body.ta-dark input[type="time"] {
     color-scheme: dark;
+}
+
+body.ta-dark .ta-attachments-list {
+    border-color: #3f3f3f;
+}
+
+body.ta-dark .ta-att-warning {
+    color: #fbbf24;
 }
 
 body.ta-dark button.ta-secondary {
