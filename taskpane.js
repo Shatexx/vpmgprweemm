@@ -530,6 +530,30 @@
                 window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', applyTheme);
             }
 
+            // Needed for the pinned task pane (SupportsPinning in the
+            // manifest): pinning keeps the pane open across different
+            // emails instead of closing it, but Outlook does NOT
+            // re-render the pane's content on its own when that happens -
+            // without this handler a pinned pane just keeps showing
+            // whichever email was active when it was pinned (title,
+            // attachments, everything stale). Rebuilds the task form
+            // fresh for the newly active item; a no-op while on the token
+            // screen. Isolated in its own try/catch like the theme
+            // handler above - older hosts without ItemChanged support
+            // just don't get the live refresh, pinning (if even offered
+            // there) stays functional otherwise.
+            try {
+                if (Office.context && Office.context.mailbox && typeof Office.context.mailbox.addHandlerAsync === 'function') {
+                    Office.context.mailbox.addHandlerAsync(Office.EventType.ItemChanged, function () {
+                        if (document.getElementById('taSaveTaskBtn')) {
+                            renderTaskForm();
+                        }
+                    });
+                }
+            } catch (itemChangedHandlerError) {
+                // Not supported on this host/version.
+            }
+
             if (getToken()) {
                 renderTaskForm();
             } else {
